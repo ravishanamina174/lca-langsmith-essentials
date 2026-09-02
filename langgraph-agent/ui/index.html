@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LangSlice</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍕</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  /* LangChain brand palette, light mode. Black is Dark Shade 2 rather than
+     pure black, and the accent is the core brand Blue rather than a red. The
+     page background stays white by choice; the tinted surfaces around it
+     (sidebar, user bubbles) carry the brand blue. */
+  :root {
+    --bg: #ffffff;
+    --sidebar-bg: #e5f4ff;    /* Light Tint 4 */
+    --text: #161f34;          /* Dark Shade 2 */
+    --muted: rgba(22, 31, 52, 0.6);
+    --faint: rgba(22, 31, 52, 0.2);
+    --hairline: rgba(22, 31, 52, 0.12);
+    --fill: rgba(22, 31, 52, 0.06);
+    --code-bg: rgba(22, 31, 52, 0.08);
+    --code-text: #6e8900;     /* Green */
+    --primary: #006ddd;       /* Blue */
+    --primary-hover: #2f4b68; /* Dark Shade 3 */
+    --on-primary: #f2faff;    /* Light Tint 5 */
+    --error-bg: #f8e8e6;      /* Peach lighter */
+    --error-text: #634643;    /* Peach deep - warning states only */
+    --sans: "Source Sans 3", "Source Sans Pro", -apple-system, BlinkMacSystemFont,
+            "Segoe UI", Roboto, sans-serif;
+    --mono: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sidebar-w: 336px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------------------------------------------------------------- layout */
+
+  .app { display: flex; height: 100vh; overflow: hidden; }
+
+  .sidebar {
+    width: var(--sidebar-w);
+    flex: 0 0 var(--sidebar-w);
+    background: var(--sidebar-bg);
+    padding: 1.5rem 1.5rem 4rem;
+    overflow-y: auto;
+  }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .main-inner {
+    width: 100%;
+    max-width: 52rem;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }
+
+  .page-head { padding-top: 3rem; padding-bottom: 0.5rem; }
+
+  /* Chef mascot, standing in the gutter right of the message column. Purely
+     decorative: it paints behind the page and ignores the pointer, so it can
+     never intercept a click on the composer or a scroll on the transcript.
+
+     Two numbers to keep in mind when resizing it:
+
+     - `bottom` clears the composer strip. .composer-wrap is opaque white and
+       spans the full width of .main, so a robot at bottom:0 would have its feet
+       cropped by it. 5.5rem puts it on top of that strip instead, which reads
+       as a floor to stand on.
+     - It only appears once there is a gutter to stand in. The sidebar (336px)
+       plus the 52rem message column already claim ~1168px, so below 1200px the
+       robot would be standing on the chat rather than beside it. Above that the
+       gutter is still narrower than the robot, so its left edge does pass
+       behind the far end of long message lines - which is why it is z-index 0
+       and .main is z-index 1. Narrow the clamp if that bothers you. */
+  .mascot {
+    display: none;
+    position: fixed;
+    right: 0.5rem;
+    bottom: 5.5rem;
+    width: clamp(220px, 21vw, 360px);
+    height: auto;
+    z-index: 0;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* Above the mascot, so prose and the composer always win the overlap. */
+  .main { position: relative; z-index: 1; }
+
+  @media (min-width: 1200px) { .mascot { display: block; } }
+
+  h1 {
+    font-size: 2.25rem;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.005em;
+  }
+
+  h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    padding: 0.5rem 0 0.75rem;
+  }
+
+  .caption {
+    font-size: 0.875rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .divider { border: none; border-top: 1px solid var(--faint); margin: 1.5rem 0 0.5rem; }
+
+  /* ---------------------------------------------------------------- widgets */
+
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.82em;
+    background: var(--code-bg);
+    color: var(--code-text);
+    padding: 0.15em 0.35em;
+    border-radius: 0.25rem;
+    word-break: break-all;
+  }
+
+  button {
+    font-family: var(--sans);
+    font-size: 1rem;
+    font-weight: 400;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--faint);
+    border-radius: 0.5rem;
+    padding: 0.35rem 0.75rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  button:hover:not(:disabled) { color: var(--primary); border-color: var(--primary); }
+  button:disabled { cursor: default; }
+
+  button.primary {
+    width: 100%;
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-primary);
+    margin: 0.25rem 0 1rem;
+  }
+  button.primary:hover {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+    color: var(--on-primary);
+  }
+
+  .conversations { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
+
+  .conversations button {
+    width: 100%;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .conversations button.active {
+    color: var(--primary);
+    border-color: var(--primary);
+    cursor: default;
+  }
+
+  details {
+    border: 1px solid var(--faint);
+    border-radius: 0.5rem;
+    margin: 0.4rem 0;
+    background: var(--bg);
+  }
+  details > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before {
+    content: "";
+    width: 0; height: 0;
+    border-left: 5px solid var(--muted);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform 0.15s;
+  }
+  details[open] > summary::before { transform: rotate(90deg); }
+  details > summary:hover { color: var(--primary); }
+  .details-body { padding: 0 0.75rem 0.6rem; font-size: 0.875rem; }
+
+  pre.json {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    background: var(--fill);
+    color: var(--text);
+    padding: 0.75rem;
+    border-radius: 0.4rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* ------------------------------------------------------------ order panel */
+
+  #orderPanel { font-size: 0.9rem; }
+  #orderPanel .line { margin: 0.35rem 0; }
+  #orderPanel .totals { margin-top: 0.75rem; }
+  #orderPanel .totals .line { margin: 0.15rem 0; }
+
+  /* --------------------------------------------------------------- messages */
+
+  .messages { flex: 1; overflow-y: auto; padding-bottom: 1rem; }
+
+  .msg { display: flex; gap: 0.75rem; padding: 0.5rem 0; }
+
+  .avatar {
+    flex: 0 0 2rem;
+    width: 2rem; height: 2rem;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem;
+    background: var(--fill);
+    user-select: none;
+  }
+  .msg.user .avatar { background: #cce9ff; }
+
+  .bubble {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+  }
+  .msg.user .bubble { background: var(--sidebar-bg); }
+
+  /* Prose written by the agent - keep the vertical rhythm tight so a 3-line
+     answer does not look like a document. */
+  .bubble > *:first-child { margin-top: 0; }
+  .bubble > *:last-child { margin-bottom: 0; }
+  .bubble p { margin: 0.5rem 0; }
+  .bubble ul, .bubble ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+  .bubble li { margin: 0.15rem 0; }
+  /* h5/h6 included: markdown() maps "##"-"####" onto h4-h6, and the menu uses
+     all three, so leaving them out shrinks the menu's section headings. */
+  .bubble h1, .bubble h2, .bubble h3,
+  .bubble h4, .bubble h5, .bubble h6 {
+    font-size: 1.05rem; font-weight: 600; margin: 0.75rem 0 0.25rem; padding: 0;
+  }
+  .bubble h6 { font-size: 0.95rem; }
+  .bubble a { color: var(--primary); }
+  .bubble pre {
+    font-family: var(--mono); font-size: 0.8rem; background: var(--fill);
+    padding: 0.75rem; border-radius: 0.4rem; overflow-x: auto; margin: 0.5rem 0;
+  }
+  .bubble pre code { background: none; color: var(--text); padding: 0; }
+  .bubble hr { border: none; border-top: 1px solid var(--faint); margin: 0.75rem 0; }
+
+  /* Menu tables. The wrapper scrolls so a wide table (specialty pizzas carry a
+     description column) never widens the bubble past the message column. */
+  .bubble .table-wrap { overflow-x: auto; margin: 0.5rem 0; }
+  .bubble table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  .bubble th, .bubble td {
+    padding: 0.3rem 0.7rem 0.3rem 0;
+    border-bottom: 1px solid var(--faint);
+    vertical-align: top;
+  }
+  .bubble th {
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .bubble tbody tr:last-child td { border-bottom: none; }
+
+  .error-box {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    margin: 0.5rem 0;
+  }
+  .error-box code { background: rgba(99, 70, 67, 0.1); color: inherit; }
+
+  /* Three-dot "Sal is thinking" pulse, standing in for st.spinner. */
+  .thinking { display: flex; align-items: center; gap: 0.35rem; height: 1.6rem; }
+  .thinking span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  .thinking span:nth-child(2) { animation-delay: 0.2s; }
+  .thinking span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+
+  /* --------------------------------------------------------------- composer */
+
+  .composer-wrap { flex: 0 0 auto; background: var(--bg); padding-bottom: 1.5rem; }
+
+  .composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+    background: var(--sidebar-bg);
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+    transition: border-color 0.15s;
+  }
+  .composer:focus-within { border-color: var(--primary); }
+
+  .composer textarea {
+    flex: 1;
+    resize: none;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: var(--sans);
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--text);
+    max-height: 10rem;
+    padding: 0.15rem 0;
+  }
+  .composer textarea::placeholder { color: var(--muted); }
+
+  .send {
+    flex: 0 0 auto;
+    width: 2rem; height: 2rem;
+    padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 0.4rem;
+  }
+  .send:hover:not(:disabled) { color: var(--primary); border: none; background: transparent; }
+  .send:disabled { opacity: 0.35; }
+  .send svg { width: 1.1rem; height: 1.1rem; }
+
+  @media (max-width: 900px) {
+    .app { flex-direction: column; height: auto; overflow: visible; }
+    .sidebar { width: 100%; flex: none; padding-bottom: 1.5rem; }
+    .main { height: auto; }
+    .main-inner { padding: 0 1rem; }
+    .page-head { padding-top: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <h3>Session</h3>
+    <p class="caption">Model: <code id="cfgModel">…</code></p>
+    <p class="caption">Thread: <code id="cfgThread">…</code></p>
+    <p class="caption" id="cfgTracing">Tracing: …</p>
+
+    <button class="primary" id="newConversation" style="margin-top:1rem">＋ New conversation</button>
+
+    <p class="caption">Conversations</p>
+    <div class="conversations" id="conversationList"></div>
+
+    <hr class="divider">
+    <h3>Order</h3>
+    <div id="orderPanel"><p class="caption">No order started yet.</p></div>
+  </aside>
+
+  <main class="main">
+    <div class="main-inner page-head">
+      <h1>🍕 LangSlice</h1>
+      <p class="caption">Ordering assistant demo — traces land in LangSmith.</p>
+    </div>
+
+    <div class="messages" id="messagesScroll">
+      <div class="main-inner" id="messages"></div>
+    </div>
+
+    <div class="composer-wrap">
+      <div class="main-inner">
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="What can I get started for you?"></textarea>
+          <button class="send" id="send" title="Send" aria-label="Send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5"></line>
+              <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <img class="mascot" src="/ui/robot.png" alt="" width="360" height="369">
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const STORAGE_KEY = "langslice.conversations.v1";
+
+  const el = {
+    model: document.getElementById("cfgModel"),
+    thread: document.getElementById("cfgThread"),
+    tracing: document.getElementById("cfgTracing"),
+    newConversation: document.getElementById("newConversation"),
+    conversationList: document.getElementById("conversationList"),
+    orderPanel: document.getElementById("orderPanel"),
+    messages: document.getElementById("messages"),
+    scroll: document.getElementById("messagesScroll"),
+    input: document.getElementById("input"),
+    send: document.getElementById("send"),
+  };
+
+  // conversations: [{ thread_id, title, label }] - label is the order number once
+  // one exists.
+  let state = { conversations: [], activeId: null };
+  let streaming = false;
+  // Identifies the server process this page is talking to; see load().
+  let serverId = null;
+
+  // -------------------------------------------------------------- utilities
+
+  const money = (n) => `$${Number(n).toFixed(2)}`;
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  // Code spans are pulled out before emphasis is applied, so an underscore
+  // inside `snake_case` is not read as italics. U+0000 is the placeholder
+  // because it cannot occur in agent prose.
+  const SENTINEL = "\u0000";
+  const SENTINEL_RE = /\u0000(\d+)\u0000/g;
+
+  function inline(text) {
+    // Escape first, then re-introduce the small set of inline marks the agent
+    // actually uses. Order matters: code spans are extracted before emphasis so
+    // an underscore inside `snake_case` is not read as italics.
+    const codes = [];
+    let out = escapeHtml(text).replace(/`([^`]+)`/g, (_, code) => {
+      codes.push(code);
+      return `${SENTINEL}${codes.length - 1}${SENTINEL}`;
+    });
+    out = out
+      .replace(/\[([^\]]+)\]\((https?:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/(^|[\s(])_([^_\n]+)_/g, "$1<em>$2</em>");
+    return out.replace(SENTINEL_RE, (_, i) => `<code>${codes[Number(i)]}</code>`);
+  }
+
+  /** Minimal block-level markdown: enough for the shapes the agent produces. */
+  function markdown(src) {
+    const lines = String(src).replace(/\r\n/g, "\n").split("\n");
+    const html = [];
+    let paragraph = [];
+    let list = null; // "ul" | "ol"
+    let fence = null; // buffered code-fence lines
+
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      html.push(`<p>${paragraph.map(inline).join("<br>")}</p>`);
+      paragraph = [];
+    };
+    const flushList = () => {
+      if (!list) return;
+      html.push(`</${list}>`);
+      list = null;
+    };
+    const flushAll = () => { flushParagraph(); flushList(); };
+
+    // GFM pipe tables. get_menu's display_markdown is mostly tables, so without
+    // these every menu row would land in a paragraph as literal pipes.
+    const isRow = (s) => /^\s*\|.*\|\s*$/.test(s);
+    const isDelim = (s) => /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(s);
+    // Good enough for the agent's tables - a pipe inside a cell is not escaped.
+    const cells = (s) =>
+      s.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (fence !== null) {
+        if (/^\s*```/.test(line)) {
+          html.push(`<pre><code>${escapeHtml(fence.join("\n"))}</code></pre>`);
+          fence = null;
+        } else {
+          fence.push(line);
+        }
+        continue;
+      }
+      if (/^\s*```/.test(line)) { flushAll(); fence = []; continue; }
+      if (!line.trim()) { flushAll(); continue; }
+
+      const heading = line.match(/^(#{1,6})\s+(.*)$/);
+      if (heading) {
+        flushAll();
+        const level = Math.min(heading[1].length + 2, 6);
+        html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+        continue;
+      }
+      if (/^\s*([-*_])\s*\1\s*\1[\s-*_]*$/.test(line)) { flushAll(); html.push("<hr>"); continue; }
+
+      if (isRow(line) && isDelim(lines[i + 1] || "")) {
+        flushAll();
+        const align = cells(lines[i + 1]).map((c) =>
+          /^:-+:$/.test(c) ? "center" : /^-+:$/.test(c) ? "right" : "left");
+        const head = cells(line);
+        const body = [];
+        for (i += 2; i < lines.length && isRow(lines[i]); i++) body.push(cells(lines[i]));
+        i--; // the loop's own i++ steps past the last row we consumed
+        const cell = (tag, text, j) =>
+          `<${tag} style="text-align:${align[j] || "left"}">${inline(text)}</${tag}>`;
+        const row = (r, tag) => `<tr>${r.map((c, j) => cell(tag, c, j)).join("")}</tr>`;
+        html.push(
+          `<div class="table-wrap"><table><thead>${row(head, "th")}</thead>` +
+          `<tbody>${body.map((r) => row(r, "td")).join("")}</tbody></table></div>`
+        );
+        continue;
+      }
+
+      const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+      const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (bullet || numbered) {
+        const kind = bullet ? "ul" : "ol";
+        flushParagraph();
+        if (list !== kind) { flushList(); html.push(`<${kind}>`); list = kind; }
+        html.push(`<li>${inline((bullet || numbered)[1])}</li>`);
+        continue;
+      }
+
+      flushList();
+      paragraph.push(line.trim());
+    }
+    if (fence !== null) html.push(`<pre><code>${escapeHtml(fence.join("\n"))}</code></pre>`);
+    flushAll();
+    return html.join("");
+  }
+
+  async function json(url, options) {
+    const res = await fetch(url, options);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
+    return body;
+  }
+
+  function scrollToBottom() {
+    el.scroll.scrollTop = el.scroll.scrollHeight;
+  }
+
+  // ------------------------------------------------------- conversation state
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, server_id: serverId }));
+  }
+
+  function load() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      // Conversations belong to the server process that created them. The
+      // checkpointer in .langgraph_api outlives a restart, so without this check
+      // a restarted server would resume a half-finished order - and LangSmith
+      // would log that as a brand new thread starting mid-conversation. A new
+      // server id means: forget the list, start clean.
+      if (!saved || saved.server_id !== serverId) {
+        localStorage.removeItem(STORAGE_KEY);
+        return;
+      }
+      if (Array.isArray(saved.conversations)) {
+        state = { conversations: saved.conversations, activeId: saved.activeId };
+      }
+    } catch (_) { /* corrupt storage just means a fresh session */ }
+  }
+
+  const active = () => state.conversations.find((c) => c.thread_id === state.activeId);
+
+  function renderConversations() {
+    el.conversationList.innerHTML = "";
+    // Newest first.
+    [...state.conversations].reverse().forEach((conversation) => {
+      const isActive = conversation.thread_id === state.activeId;
+      const button = document.createElement("button");
+      button.textContent = (isActive ? "● " : "") + (conversation.label || conversation.title);
+      button.className = isActive ? "active" : "";
+      button.disabled = isActive;
+      button.onclick = () => selectConversation(conversation.thread_id);
+      el.conversationList.appendChild(button);
+    });
+    el.thread.textContent = state.activeId || "—";
+  }
+
+  // ------------------------------------------------------------- order panel
+
+  function renderOrder(order) {
+    if (!order) {
+      el.orderPanel.innerHTML = '<p class="caption">No order started yet.</p>';
+      return;
+    }
+
+    const parts = [
+      `<p class="caption">${escapeHtml(order.order_id)} · ${escapeHtml(order.status)} · ${escapeHtml(order.order_type)}</p>`,
+    ];
+
+    if (!order.pizzas.length && !order.sides.length) {
+      parts.push('<p class="caption">Order is empty.</p>');
+    }
+
+    for (const pizza of order.pizzas) {
+      const toppings = pizza.toppings.length ? pizza.toppings.join(", ") : "no toppings";
+      const name = pizza.specialty_pizza || pizza.crust;
+      parts.push(
+        `<div class="line"><strong>#${pizza.pizza_number}</strong> ${pizza.quantity}x ` +
+        `${escapeHtml(pizza.size)} ${escapeHtml(name)} — ${escapeHtml(toppings)}<br>` +
+        `<code>${money(pizza.line_total)}</code></div>`
+      );
+      // The same lines the agent is handed, so a spoken breakdown that disagrees
+      // with the order state is visible side by side.
+      const lines = pizza.unit_price_lines
+        .map((l) => `<div class="line">${escapeHtml(l.label)} — <code>${money(l.amount)}</code></div>`)
+        .join("");
+      const perPizza = pizza.quantity > 1
+        ? `<p class="caption">${money(pizza.unit_price)} per pizza × ${pizza.quantity} = ${money(pizza.line_total)}</p>`
+        : "";
+      parts.push(
+        `<details><summary>Price breakdown</summary><div class="details-body">${lines}${perPizza}</div></details>`
+      );
+    }
+
+    for (const side of order.sides) {
+      parts.push(
+        `<div class="line"><strong>side</strong> ${side.quantity}x ${escapeHtml(side.item)} — ` +
+        `<code>${money(side.line_total)}</code></div>`
+      );
+    }
+
+    // Break the total into its parts - a delivery fee that only shows up inside
+    // the total reads as the agent overcharging.
+    const totals = [`<div class="line">Subtotal — <code>${money(order.subtotal)}</code></div>`];
+    if (order.order_type === "delivery") {
+      totals.push(order.delivery_fee
+        ? `<div class="line">Delivery fee — <code>${money(order.delivery_fee)}</code></div>`
+        : `<div class="line">Delivery fee — <code>$0.00</code> (waived over $35)</div>`);
+    }
+    totals.push(`<div class="line">Tax (8.875%) — <code>${money(order.tax)}</code></div>`);
+    totals.push(`<div class="line"><strong>Total</strong> <code>${money(order.total)}</code></div>`);
+    parts.push(`<div class="totals">${totals.join("")}</div>`);
+
+    parts.push(
+      `<details><summary>Raw order JSON</summary><div class="details-body">` +
+      `<pre class="json">${escapeHtml(JSON.stringify(order, null, 2))}</pre></div></details>`
+    );
+
+    el.orderPanel.innerHTML = parts.join("");
+  }
+
+  async function refreshOrder() {
+    const threadId = state.activeId;
+    if (!threadId) return;
+    try {
+      const data = await json(`/ui/order?thread_id=${encodeURIComponent(threadId)}`);
+      if (threadId !== state.activeId) return; // switched away mid-fetch
+      renderOrder(data.order);
+
+      // Once an order exists, the sidebar labels the conversation by its number.
+      const conversation = active();
+      if (conversation && data.order) {
+        const label = `Order #${data.order.order_id}`;
+        if (conversation.label !== label) {
+          conversation.label = label;
+          save();
+          renderConversations();
+        }
+      }
+    } catch (err) {
+      el.orderPanel.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // ---------------------------------------------------------------- messages
+
+  function addMessage(role, html) {
+    const wrapper = document.createElement("div");
+    wrapper.className = `msg ${role}`;
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = role === "user" ? "🧑" : "🍕";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.innerHTML = html;
+    wrapper.append(avatar, bubble);
+    el.messages.appendChild(wrapper);
+    scrollToBottom();
+    return bubble;
+  }
+
+  function renderTranscript(messages) {
+    el.messages.innerHTML = "";
+    for (const message of messages) {
+      addMessage(message.role, message.role === "user"
+        ? `<p>${escapeHtml(message.content).replace(/\n/g, "<br>")}</p>`
+        : markdown(message.content));
+    }
+  }
+
+  // ------------------------------------------------------------------ actions
+
+  async function newConversation() {
+    el.newConversation.disabled = true;
+    try {
+      const { thread_id } = await json("/ui/thread", { method: "POST" });
+      state.conversations.push({
+        thread_id,
+        title: `Conversation ${state.conversations.length + 1}`,
+        label: null,
+      });
+      state.activeId = thread_id;
+      save();
+      renderConversations();
+      await selectConversation(thread_id);
+    } catch (err) {
+      el.messages.innerHTML = "";
+      addMessage("assistant", `<div class="error-box">Could not start a conversation: <code>${escapeHtml(err.message)}</code></div>`);
+    } finally {
+      el.newConversation.disabled = false;
+    }
+  }
+
+  async function selectConversation(threadId) {
+    state.activeId = threadId;
+    save();
+    renderConversations();
+    el.messages.innerHTML = "";
+    try {
+      const { messages } = await json(`/ui/history?thread_id=${encodeURIComponent(threadId)}`);
+      if (threadId !== state.activeId) return;
+      renderTranscript(messages);
+    } catch (err) {
+      // The usual cause is a thread the server no longer knows about (fresh
+      // checkpointer, old localStorage). Drop it rather than stranding the page
+      // on a conversation that can never take a message.
+      state.conversations = state.conversations.filter((c) => c.thread_id !== threadId);
+      save();
+      if (state.conversations.length) {
+        await selectConversation(state.conversations[state.conversations.length - 1].thread_id);
+      } else {
+        await newConversation();
+      }
+      return;
+    }
+    await refreshOrder();
+  }
+
+  async function send() {
+    if (streaming) return;
+    const message = el.input.value.trim();
+    if (!message || !state.activeId) return;
+
+    const threadId = state.activeId;
+    el.input.value = "";
+    autosize();
+    streaming = true;
+    el.send.disabled = true;
+
+    addMessage("user", `<p>${escapeHtml(message).replace(/\n/g, "<br>")}</p>`);
+    const bubble = addMessage("assistant", '<div class="thinking"><span></span><span></span><span></span></div>');
+
+    let text = "";
+    let failure = null;
+
+    try {
+      const res = await fetch("/ui/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, thread_id: threadId }),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const drain = (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // last element is a partial line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event;
+          try { event = JSON.parse(line); } catch (_) { continue; }
+          if (event.type === "token") {
+            text += event.text;
+            bubble.innerHTML = markdown(text);
+            scrollToBottom();
+          } else if (event.type === "error") {
+            failure = event.message;
+          }
+        }
+      };
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        drain(decoder.decode(value, { stream: true }));
+      }
+      drain(decoder.decode());
+    } catch (err) {
+      failure = `${err.name}: ${err.message}`;
+    }
+
+    if (failure) {
+      // A turn that dies mid-flight leaves the two stores disagreeing: order
+      // tools have already mutated ORDERS, but the checkpoint may not have the
+      // tool messages. Say so loudly rather than letting it look like a
+      // rendering glitch.
+      bubble.innerHTML =
+        (text ? markdown(text) : "") +
+        `<div class="error-box"><strong>The turn failed partway through:</strong> ` +
+        `<code>${escapeHtml(failure)}</code><br><br>` +
+        `Any tool calls that already ran are reflected in the Order panel, but the ` +
+        `conversation may not have recorded them — compare the panel against the ` +
+        `trace, and start a new conversation if the two have diverged.</div>`;
+    } else if (!text) {
+      bubble.innerHTML = '<p class="caption">(no reply)</p>';
+    }
+
+    streaming = false;
+    el.send.disabled = false;
+    scrollToBottom();
+    // Always repaint from post-turn state, including after a failed turn where
+    // tools may already have mutated the order.
+    await refreshOrder();
+    el.input.focus();
+  }
+
+  // -------------------------------------------------------------------- wiring
+
+  function autosize() {
+    el.input.style.height = "auto";
+    el.input.style.height = `${Math.min(el.input.scrollHeight, 160)}px`;
+  }
+
+  el.input.addEventListener("input", autosize);
+  el.input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+    }
+  });
+  el.send.addEventListener("click", send);
+  el.newConversation.addEventListener("click", newConversation);
+
+  async function boot() {
+    try {
+      const config = await json("/ui/config");
+      serverId = config.server_id;
+      el.model.textContent = config.model;
+      el.tracing.innerHTML = config.tracing
+        ? `Tracing to: <code>${escapeHtml(config.project)}</code>`
+        : "Tracing: off";
+      if (!config.openai_key_set) {
+        addMessage("assistant",
+          '<div class="error-box"><code>OPENAI_API_KEY</code> is not set. ' +
+          "Copy <code>.env.example</code> to <code>.env</code> and fill it in.</div>");
+        el.send.disabled = true;
+        return;
+      }
+    } catch (err) {
+      addMessage("assistant", `<div class="error-box">Could not reach the server: <code>${escapeHtml(err.message)}</code></div>`);
+      return;
+    }
+
+    load();
+    if (!state.conversations.length || !state.activeId) {
+      await newConversation();
+    } else {
+      renderConversations();
+      await selectConversation(state.activeId);
+    }
+    el.input.focus();
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

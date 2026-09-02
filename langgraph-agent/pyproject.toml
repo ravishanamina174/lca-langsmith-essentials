@@ -1,0 +1,30 @@
+[project]
+name = "langslice-pizza-agent"
+version = "0.1.0"
+description = "LangSlice pizzeria ordering agent on LangChain + LangGraph - a LangSmith Essentials demo app"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.3.15",
+    "langchain-openai>=1.1.0",
+    "langgraph>=1.2.11",
+    "langsmith>=0.2.0",
+    "python-dotenv>=1.0.1",
+]
+
+# A dependency group rather than an optional-dependency extra: uv syncs the
+# `dev` group by default, so a plain `uv sync` gets students the langgraph CLI
+# that `uv run langgraph dev` needs. As an extra it required `--extra dev`.
+[dependency-groups]
+dev = ["langgraph-cli[inmem]>=0.1.65"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["agent", "database", "stock_evaluator"]
+packages = ["ui"]
+
+[tool.setuptools.package-data]
+# index.html is the UI - it has to ship with the package, not just sit in the repo.
+ui = ["*.html"]

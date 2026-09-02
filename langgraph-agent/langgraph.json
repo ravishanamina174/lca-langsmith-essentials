@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "pizza_agent": "./agent.py:pizza_agent"
+  },
+  "env": "../.env",
+  "http": {
+    "app": "./ui/app.py:app"
+  }
+}

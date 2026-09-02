@@ -1,0 +1,36 @@
+# env
+.env*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+
+# langgraph / langsmith
+.langgraph_api/
+# download_traces.py default output; traces-1.json and traces-2.json stay tracked
+traces.json
+
+# editors & os
+.claude/settings.local.json
+.vscode/
+.idea/
+.DS_Store
+
+# secrets & credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+credentials.json
+token.json
+
+# node
+node_modules/

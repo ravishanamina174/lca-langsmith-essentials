@@ -1,0 +1,22 @@
+[project]
+name = "langslice-pizza-agent-claude-sdk"
+version = "0.1.0"
+description = "LangSlice pizzeria ordering agent on the Claude Agent SDK - a LangSmith Essentials demo app"
+requires-python = ">=3.11"
+# The point of this project: LangSmith traces an agent that has no LangChain in
+# it. Adding langchain, langgraph, or langchain-openai here would defeat the
+# demonstration - `uv pip list | grep langchain` is expected to return nothing.
+# pydantic is not listed because langsmith requires it; it is used to turn the
+# tool functions' type hints into JSON Schema.
+dependencies = [
+    "claude-agent-sdk>=0.2.147,<0.3",
+    "langsmith>=0.2.0",
+    "python-dotenv>=1.0.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["agent", "database", "stock_evaluator"]
