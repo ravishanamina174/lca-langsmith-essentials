@@ -14,9 +14,9 @@ This project imports no LangChain and no LangGraph. Its only dependencies are
     uv pip list | grep langchain     # returns nothing
 
 That is what it is here to demonstrate. LangSmith is a tracing backend, not a
-LangChain feature: the run tree in this module is assembled by hand out of
-``langsmith`` primitives, and it lands in the same project, next to the
-LangGraph agent's traces, in the same shape.
+LangChain feature: one call to ``configure_claude_agent_sdk()`` below traces
+this agent into the same project, next to the LangGraph agent's traces, in the
+same shape.
 
 How the pieces fit:
 
@@ -26,14 +26,27 @@ How the pieces fit:
                           in-process MCP server -> tool functions -> database
                                   |
                                   v
-                          LangSmith run tree (built here)
+                          LangSmith run tree (built by the integration)
 
-Nothing reports the turn or the model calls, because the agent loop runs in a
-subprocess - so this module opens a chain run per customer turn, an ``llm`` run
-per assistant turn, and a ``tool`` run per tool call. Tool arguments are
-validated by the SDK before a handler is reached: ``create_sdk_mcp_server``
-runs ``jsonschema.validate`` against the schema below and returns an error
-result the model can read, so no validation layer is needed here.
+The agent loop runs in a subprocess and emits no callbacks, so the integration
+instruments ``ClaudeSDKClient`` in place and injects ``PreToolUse`` /
+``PostToolUse`` hooks. It opens a chain run per customer turn, a
+``claude.assistant.turn`` ``llm`` run per assistant turn - carrying the real
+message history and token usage, read back from the CLI's own transcript - and
+a ``tool`` run per tool call. Tool spans are named with the fully qualified MCP
+name, so ``add_pizza_to_order`` appears as
+``mcp__pizzeria__add_pizza_to_order``.
+
+Nothing in this module builds a run by hand. What it does still own is
+``database.get_ingredient``, which carries a plain ``@traceable`` (see
+``database.py``): the integration copies the active tool run into the tracing
+context before calling a handler, so those lookups nest under the tool that
+made them and show ``stock_units`` where the first bug is diagnosed.
+
+Tool arguments are validated by the SDK before a handler is reached:
+``create_sdk_mcp_server`` runs ``jsonschema.validate`` against the schema below
+and returns an error result the model can read, so no validation layer is
+needed here.
 
 Tool-call spans stay out of the terminal UI - the split the course relies on,
 where prose reaches the customer and tool traffic reaches LangSmith.
@@ -61,13 +74,11 @@ from claude_agent_sdk import (
     ResultMessage,
     SdkMcpTool,
     TextBlock,
-    ToolUseBlock,
     create_sdk_mcp_server,
     tool,
 )
 from dotenv import load_dotenv
-from langsmith import trace, traceable
-from langsmith.run_helpers import get_current_run_tree
+from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
 from pydantic import create_model
 
 import database as db
@@ -77,6 +88,34 @@ import database as db
 # The file lives at the repo root, shared with the sibling project; dotenv
 # walks up from this directory to find it.
 load_dotenv(override=True)
+
+# Required by the streaming-input envelope in ``PizzeriaSession._streamed``, and
+# useless without it - see that docstring for why the turn is sent that way.
+#
+# ``RunTree.patch()`` drops ``inputs`` by default to avoid uploading a second
+# copy of a payload ``post()`` already sent. The catch, in langsmith's own words:
+# "inputs first set *after* post() are never persisted". The integration writes
+# ``run.inputs["messages"]`` from inside its message loop, which is after the
+# root run is posted, so by default that write is discarded and the root run
+# reaches LangSmith carrying only ``system``. That is worse than the string
+# prompt it replaces: no customer turn in the input panel at all.
+#
+# ``setdefault`` rather than assignment so anyone who sets it deliberately keeps
+# their value, and here rather than in ``.env`` so a stale ``.env`` cannot
+# silently break the traces. It has to run before the first patch; import time
+# is early enough, since the flag is read once and cached.
+os.environ.setdefault("LANGSMITH_EXCLUDE_INPUTS_ON_PATCH", "false")
+
+# All of the tracing. It patches ClaudeSDKClient in place and wraps MCP tool
+# handlers as they are constructed, so it has to run before a session is built -
+# module scope, after .env, is the one place that holds for run_agent.py and
+# eval.py alike. `name` overrides the integration's default root run name
+# ("claude.conversation") so both harnesses' traces are called the same thing;
+# `harness` is what tells them apart once they are side by side in the project.
+configure_claude_agent_sdk(
+    name="langslice_pizza_agent",
+    metadata={"harness": "claude-agent-sdk"},
+)
 
 MODEL_NAME = os.getenv("PIZZA_AGENT_CLAUDE_MODEL", "claude-opus-5")
 EFFORT = os.getenv("PIZZA_AGENT_CLAUDE_EFFORT", "low")
@@ -138,7 +177,11 @@ a custom pizza.
    question.
 6. If `confirm_order` rejects the order, tell the customer plainly what it says
    and what would clear it. Do not call it again until something has actually
-   changed on the order.
+   changed on the order. You can say a rejection looks mistaken and apologize
+   for it, but do not theorize about the cause to the customer: never tell them
+   what the kitchen system is or is not counting, or which part of their order
+   it did or didn't include. You are the ordering desk, not the kitchen system,
+   and you have no visibility into how it computes anything.
 
 Whenever you read a total back on a delivery order, name the $3.99 delivery fee as
 part of it, or say it was waived because the order is over $35, so the number is
@@ -718,15 +761,13 @@ def _mcp_tool(fn: Any, thread_id: str, session: PizzeriaSession) -> SdkMcpTool[A
         # The SDK has already validated `args` against the schema by this point,
         # so a handler only has to deal with real failures.
         #
-        # run_type="tool" and an explicit parent: nothing else traces this call,
-        # and the parent has to be named rather than inherited because the MCP
-        # server may run the handler on a task the traced turn did not create.
-        @traceable(run_type="tool", name=fn.__name__)
-        def _traced(**call_args: Any) -> Any:
-            return fn(thread_id, **call_args)
-
+        # Untraced on purpose: the integration's PreToolUse hook has already
+        # opened the tool run, and it binds that run into the tracing context
+        # before calling this handler - so a second span here would only
+        # duplicate it, while `@traceable` further down (database.get_ingredient)
+        # still nests correctly.
         try:
-            result = _traced(**args, langsmith_extra={"parent": session.current_run})
+            result = fn(thread_id, **args)
         except Exception as exc:  # noqa: BLE001 - surfaced to the model, not raised
             # Composed rather than raised: an uncaught exception reaches Claude
             # as a bare str(exc) with no context. is_error marks it a failed
@@ -771,8 +812,6 @@ class PizzeriaSession:
         self.thread_id = thread_id
         self.model = model or MODEL_NAME
 
-        #: Parent run for the turn in flight, so tool handlers can attach to it.
-        self.current_run: Any = None
         #: Tool traffic for the turn in flight, for ``--show-tools`` and eval.
         self.tool_calls: list[dict[str, Any]] = []
         #: Cost and token totals reported by the last completed turn.
@@ -847,18 +886,51 @@ class PizzeriaSession:
         self.tool_calls = []
         return await self._turn(text)
 
-    @traceable(run_type="chain", name="langslice_pizza_agent")
-    async def _turn(self, text: str) -> str:
-        """One customer turn, traced as the root of the run tree."""
-        assert self._client is not None
-        self.current_run = get_current_run_tree()
+    async def _streamed(self, text: str):
+        """Yield one customer turn in the SDK's streaming-input envelope.
 
-        await self._client.query(text, session_id=self.thread_id)
+        Passing the turn this way rather than as a plain string is what makes
+        the trace scoreable by a **thread-level** evaluator, which is how the
+        m4.1 sentiment judge reads a conversation.
+
+        Such an evaluator reads root runs only, and finds the conversation by
+        looking for a ``messages`` list on their inputs and outputs. Given a
+        string, the LangSmith integration writes ``inputs={"prompt", "system"}``
+        instead, which its own parser cannot read, so the customer's turns go
+        missing while the assistant's still parse from the output dict. The
+        judge then scores an agent monologue: every thread comes back positive,
+        with reasoning about there being no customer messages. Given an async
+        iterable, the integration takes its other branch and records
+        ``inputs={"messages": [...]}``, which is the shape the judge wants.
+        ``system`` stays alongside and is harmless, since ``messages`` is
+        checked first.
+
+        Nothing about the conversation changes. ``ClaudeSDKClient.query()``
+        wraps a string into exactly this envelope and writes the same JSON line
+        to the CLI, so the model, the tools, and both manufactured bugs behave
+        identically - only which branch of the tracing wrapper runs differs.
+        """
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": text},
+            "parent_tool_use_id": None,
+            "session_id": self.thread_id,
+        }
+
+    async def _turn(self, text: str) -> str:
+        """One customer turn.
+
+        Untraced here: the integration opens the root chain run inside
+        ``receive_response()``, so iterating it is what produces the trace.
+        """
+        assert self._client is not None
+
+        await self._client.query(self._streamed(text), session_id=self.thread_id)
 
         replies: list[str] = []
         async for message in self._client.receive_response():
             if isinstance(message, AssistantMessage):
-                replies.append(self._log_assistant_turn(message))
+                replies.append(self._assistant_text(message))
             elif isinstance(message, ResultMessage):
                 self._log_result(message)
 
@@ -866,59 +938,32 @@ class PizzeriaSession:
         # ones are the model narrating its way through tool calls.
         return next((r for r in reversed(replies) if r), "")
 
-    def _log_assistant_turn(self, message: AssistantMessage) -> str:
-        """Record one assistant turn as an ``llm`` child run; return its text."""
-        text = "\n".join(
+    @staticmethod
+    def _assistant_text(message: AssistantMessage) -> str:
+        """Return one assistant turn's prose, dropping tool-use blocks."""
+        return "\n".join(
             b.text for b in message.content if isinstance(b, TextBlock) and b.text
         ).strip()
-        tool_calls = [
-            {"name": b.name, "args": b.input}
-            for b in message.content
-            if isinstance(b, ToolUseBlock)
-        ]
-
-        # The prompt itself is assembled inside the CLI and never crosses back
-        # over, so inputs name the model rather than pretend to hold messages.
-        with trace(
-            name="claude",
-            run_type="llm",
-            parent=self.current_run,
-            inputs={"model": message.model},
-            metadata={
-                "model": message.model,
-                "stop_reason": message.stop_reason,
-                "harness": "claude-agent-sdk",
-            },
-        ) as run:
-            run.end(
-                outputs={
-                    "text": text,
-                    "tool_calls": tool_calls,
-                    "usage": message.usage or {},
-                }
-            )
-        return text
 
     def _log_result(self, message: ResultMessage) -> None:
-        """Attach the turn's cost and token totals to the root run."""
+        """Keep the turn's cost and token totals for ``--show-tools``.
+
+        Only for the terminal readout. LangSmith gets its own numbers from the
+        integration, which reads them back from the CLI transcript - the
+        streamed totals here are partial counts and disagree with it.
+        """
         self.last_usage = {
             "num_turns": message.num_turns,
             "duration_ms": message.duration_ms,
             "total_cost_usd": message.total_cost_usd,
             "usage": message.usage or {},
+            # The CLI's own session id. The integration writes this into run
+            # metadata as `thread_id`, so it - not the `thread_id` this session
+            # was constructed with - is what identifies the conversation in
+            # LangSmith, and it is the id to search for when finding a
+            # conversation's trace.
+            "session_id": message.session_id,
         }
-        if self.current_run is not None:
-            # Reported by the SDK, not derived from LangSmith's price table -
-            # LangSmith cannot price a run whose model call it never saw.
-            self.current_run.add_metadata(
-                {
-                    "claude_sdk_session_id": message.session_id,
-                    "num_turns": message.num_turns,
-                    "total_cost_usd": message.total_cost_usd,
-                    "stop_reason": message.stop_reason,
-                    "harness": "claude-agent-sdk",
-                }
-            )
         if message.is_error:
             detail = ", ".join(message.errors or []) or message.subtype
             msg = f"Claude Agent SDK returned an error result: {detail}"

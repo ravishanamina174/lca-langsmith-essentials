@@ -1,0 +1,21 @@
+[project]
+name = "langslice-traces-claude-sdk"
+version = "0.1.0"
+description = "Replay captured LangSlice conversations into a LangSmith project - a LangSmith Essentials demo app"
+requires-python = ">=3.11"
+# This folder is its own tiny project on purpose. Without a pyproject here,
+# `cd claude-sdk-agent/traces && uv run python upload_traces.py` would walk up
+# and resolve the agent's project instead, so the scripts would run in the
+# agent's environment and drag the Claude Agent SDK in behind them. Nothing here
+# imports an agent - these two scripts only talk to the LangSmith API. The
+# sibling langgraph-agent/traces/ carries the same file for the same reason.
+dependencies = [
+    # 0.10.15 is where client.runs.query() lands, which both scripts use to read
+    # runs back. The sync client.list_runs() it replaced stops working 31 Jan 2027.
+    "langsmith>=0.10.15",
+    "python-dotenv>=1.0.1",
+]
+
+[tool.uv]
+# Scripts, not a library: nothing to build or install.
+package = false

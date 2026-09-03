@@ -44,6 +44,37 @@ from stock_evaluator import ingredient_stock_evaluator
 CONCURRENCY = int(os.getenv("EVAL_CONCURRENCY", "2"))
 
 
+def customer_turns(inputs: dict) -> list[str]:
+    """Pull the customer's messages out of one dataset example.
+
+    Three input shapes are all legitimate, because a dataset's shape follows
+    from whatever produced it:
+
+    * ``messages`` with ``type=human`` - built from a LangGraph trace, whose
+      root run's inputs are the message list.
+    * ``messages`` with ``role=user`` - hand-authored, in the OpenAI shape.
+    * ``prompt`` - built from *this* agent's traces. The LangSmith integration
+      gives each root run ``inputs={"prompt", "system"}``, one customer turn
+      per run, so such a dataset has no ``messages`` key at all.
+
+    Raises on a shape it does not recognize rather than returning nothing. A
+    target that quietly replays zero turns still returns a transcript, and a
+    transcript with no order scores 1 in ``stock_evaluator`` - so a silent
+    mismatch reads as a clean sweep in seconds rather than as a failure.
+    """
+    turns = [
+        message["content"]
+        for message in inputs.get("messages") or []
+        if (message.get("role") or message.get("type")) in {"user", "human"}
+    ]
+    if not turns and inputs.get("prompt"):
+        turns = [inputs["prompt"]]
+    if not turns:
+        msg = f"No customer message in example inputs (keys: {sorted(inputs)})."
+        raise ValueError(msg)
+    return turns
+
+
 async def evaluation_target(inputs: dict) -> dict[str, Any]:
     """Replay one dataset example's customer messages through the agent.
 
@@ -54,17 +85,9 @@ async def evaluation_target(inputs: dict) -> dict[str, Any]:
     messages: list[dict[str, Any]] = [{"role": "assistant", "content": GREETING}]
 
     async with PizzeriaSession(thread_id) as session:
-        for message in inputs.get("messages", []):
-            # Examples created from LangSmith traces use LangChain's serialized
-            # message shape (``type=human``), while hand-authored examples often
-            # use the OpenAI shape (``role=user``). Accept both - the dataset is
-            # shared with the LangGraph project.
-            message_type = message.get("role") or message.get("type")
-            if message_type not in {"user", "human"}:
-                continue
-
-            messages.append({"role": "user", "content": message["content"]})
-            reply = await session.send(message["content"])
+        for turn in customer_turns(inputs):
+            messages.append({"role": "user", "content": turn})
+            reply = await session.send(turn)
 
             # session.tool_calls holds just this turn's traffic. Each result is
             # already the JSON string the model was shown, which is exactly what

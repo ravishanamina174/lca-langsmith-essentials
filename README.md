@@ -40,9 +40,13 @@ Same system prompt, same nine tools, same database, same two bugs. The lessons f
 `langgraph-agent/`, so every command below runs from in there unless it says otherwise.
 
 `claude-sdk-agent/` has no LangChain and no LangGraph installed. Its agent loop runs
-inside a `claude` CLI subprocess and reports nothing on its own, so `agent.py` builds
-the LangSmith run tree by hand. Both projects send traces to the same project in the
-same shape, tagged with `harness` metadata.
+inside a `claude` CLI subprocess and reports nothing on its own, so `agent.py` turns
+tracing on with a single call to `configure_claude_agent_sdk()`, following
+[the LangSmith integration docs](https://docs.langchain.com/langsmith/trace-claude-agent-sdk).
+Both projects send traces to the same project in the same shape, tagged with `harness`
+metadata. Span names differ slightly between the two: on the Claude SDK side, model
+calls appear as `claude.assistant.turn` and tools carry their MCP prefix, as in
+`mcp__pizzeria__add_pizza_to_order`.
 
 ## Setup
 

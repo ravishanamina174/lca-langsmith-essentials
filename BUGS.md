@@ -8,6 +8,12 @@ implementations, not in the prompt or the graph, so the traces show a healthy
 agent doing the wrong thing. Both reproduce identically in `langgraph-agent/` and
 `claude-sdk-agent/`.
 
+The span names used below are the LangGraph agent's. In `claude-sdk-agent/` the
+tool spans carry their MCP prefix, so `add_pizza_to_order` appears as
+`mcp__pizzeria__add_pizza_to_order`, and model calls are named
+`claude.assistant.turn` rather than `ChatOpenAI`. The `get_ingredient` child runs
+that matter for the first bug are named the same in both.
+
 For each bug, the evidence sits in the trace but never in the model's context.
 That is why they fire on every run, and it is also why you can diagnose them
 from LangSmith without opening `database.py`.
