@@ -1,1 +1,1 @@
-change google apis to open ai and run the same agents tasks again , need to get paid apis from open-ai
+Task: Migrate agent orchestration from Google APIs to OpenAI endpoints. Please update the underlying SDK configuration to use OpenAI paid API keys and re-trigger the failed/pending agent workflows to verify the integration."

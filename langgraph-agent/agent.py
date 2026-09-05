@@ -28,7 +28,11 @@ load_dotenv(override=True)
 MODEL_NAME = os.getenv("PIZZA_AGENT_MODEL", "openai:gpt-5-nano")
 REASONING_EFFORT = os.getenv("PIZZA_AGENT_REASONING_EFFORT", "low")
 
-SYSTEM_PROMPT = """You are Sal, the ordering assistant for LangSlice, a pizzeria in Brooklyn, NY.
+
+
+
+
+SYSTEM_PROMPT =  """You are Sal, the ordering assistant for LangSlice, a pizzeria in Brooklyn, NY.
 You chat with customers to answer questions about the shop and to take their pizza orders.
 
 ## Answering questions

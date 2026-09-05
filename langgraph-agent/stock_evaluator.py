@@ -1,7 +1,6 @@
 """Code evaluator for out-of-stock ingredients in pizza orders."""
 
 import json
-
 import database as db
 
 
